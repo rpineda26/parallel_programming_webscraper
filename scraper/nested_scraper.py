@@ -24,6 +24,7 @@ class NestedWebScraper:
         self.faculty_url_lock = threading.Lock()
         self.csv_lock = threading.Lock()
         self.active = True
+        self.stopStats = False
         self.base_url = url
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
@@ -86,15 +87,33 @@ class NestedWebScraper:
                     self.logger.error(f"Error writing to CSV: {str(e)}")
                     
     def stats_worker(self):
-        """Worker that writes statistics to a JSON file"""
-        while self.active or not self.result_queue.empty():
-            try:
-                with self.stats_lock:
-                    with open('scraping_stats.json', 'w') as f:
-                        json.dump(self.stats.to_dict(), f, indent=4)
-                time.sleep(5)  # Update every 5 seconds
-            except Exception as e:
-                self.logger.error(f"Error writing statistics: {str(e)}")
+        """Worker that writes statistics once per session instead of every update cycle."""
+        try:
+            # while self.active or not self.result_queue.empty():
+            #     time.sleep(5)  # Regular updates, but no file writing yet
+
+            # Once the session ends, append stats to file
+            with self.stats_lock:
+                stats_file = "scraping_stats.json"
+
+                # Try loading existing data
+                try:
+                    with open(stats_file, "r") as f:
+                        existing_data = json.load(f)
+                        if not isinstance(existing_data, list):
+                            existing_data = [existing_data]  # Ensure it's a list
+                except (FileNotFoundError, json.JSONDecodeError):
+                    existing_data = []  # Start fresh if the file is missing or corrupted
+
+                # Append only once per session
+                existing_data.append(self.stats.to_dict())
+
+                # Write updated data back to file
+                with open(stats_file, "w") as f:
+                    json.dump(existing_data, f, indent=4)
+
+        except Exception as e:
+            self.logger.error(f"Error writing statistics: {str(e)}")
 
     def run(self):
         self.end_time = datetime.now() + timedelta(minutes=self.scrape_time_minutes)
@@ -151,11 +170,6 @@ class NestedWebScraper:
         csv_thread.start()
         all_threads.append(csv_thread)
 
-        stats_thread = threading.Thread(target=self.stats_worker)
-        stats_thread.daemon = True
-        stats_thread.start()
-        all_threads.append(stats_thread)
-
         print("\n\n")
 
         try:
@@ -176,18 +190,11 @@ class NestedWebScraper:
             # Clean shutdown
             self.active = False
             
-            # Signal threads to stop
-            for _ in range(len(program_threads)):
-                self.program_queue.put(None)
-            for _ in range(len(directory_threads)):
-                self.directory_queue.put(None)
-            for _ in range(len(profile_threads)):
-                self.profile_queue.put(None)
-            
             # Wait for all threads to complete with timeout
             for thread in all_threads:
                 thread.join(timeout=5)
             
-            self.result_queue.put(None)  # Signal CSV writer to stop
+            #record stats
+            self.stats_worker()
             
             self.logger.success("Scraping complete")
