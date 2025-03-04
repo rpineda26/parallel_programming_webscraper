@@ -1,2 +1,4 @@
 contacts.csv
 scraping_stats.json
+__pycache__/
+
